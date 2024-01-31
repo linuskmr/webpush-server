@@ -1,2 +1,4 @@
 /target
 push_subscriptions.db
+private.pem
+vapid_public.pem

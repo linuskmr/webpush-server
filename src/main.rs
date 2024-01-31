@@ -20,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let app = axum::Router::new()
         .route("/add_push_subscription", axum::routing::post(routes::add_push_subscription))
         .route("/show_subscriptions", axum::routing::get(routes::show_subscriptions))
+        .route("/send_pushes", axum::routing::post(routes::send_pushes))
         .with_state(app_state);
 
     let listen_addr: std::net::SocketAddr = (std::net::Ipv6Addr::UNSPECIFIED, listen_port).into();
