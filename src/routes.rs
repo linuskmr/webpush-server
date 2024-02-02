@@ -32,8 +32,28 @@ pub async fn show_subscriptions(
     axum::Json(push_subscriptions)
 }
 
+/// A notification sent via push the Service Worker, which then shows it to the user using the [Notification API](https://developer.mozilla.org/en-US/docs/Web/API/notification).
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+pub struct Notification {
+    title: String,
+    options: NotificationOptions,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+pub struct NotificationOptions {
+    body: String,
+    silent: bool,
+    data: NotificationData,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+pub struct NotificationData {
+    url: String,
+}
+
 pub async fn send_pushes(
     axum::extract::State(app_state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Json(notification): axum::extract::Json<Notification>,
 ) -> impl axum::response::IntoResponse {
     use web_push::WebPushClient;
 
@@ -60,8 +80,8 @@ pub async fn send_pushes(
 
         let sig_builder = web_push::VapidSignatureBuilder::from_pem(private_key.as_slice(), &subscription_info).unwrap().build().unwrap();
         let mut builder = web_push::WebPushMessageBuilder::new(&subscription_info);
-        let content = "Encrypted payload to be sent in the notification".as_bytes();
-        builder.set_payload(web_push::ContentEncoding::Aes128Gcm, content);
+        let content = serde_json::to_vec(&notification).unwrap();
+        builder.set_payload(web_push::ContentEncoding::Aes128Gcm, &content);
         builder.set_vapid_signature(sig_builder);
         builder.build().unwrap()
     });
@@ -70,6 +90,8 @@ pub async fn send_pushes(
     let http_client = Arc::new(web_push::IsahcWebPushClient::new().unwrap());
     futures::future::join_all(push_payloads.map(|push_payload| async {
         tracing::trace!(?push_payload, "Sending push");
-        http_client.send(push_payload).await.unwrap();
+        if let Err(err) = http_client.send(push_payload).await {
+            tracing::error!(?err, "Failed to send push");
+        }
     })).await;
 }
