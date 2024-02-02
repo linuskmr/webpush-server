@@ -22,10 +22,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/show_subscriptions", axum::routing::get(routes::show_subscriptions))
         .route("/send_pushes", axum::routing::post(routes::send_pushes))
         // Set CORS header to allow the JS to subscribe to the push service by `fetch()`ing the subscribe route
-        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
-            http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-            http::header::HeaderValue::from_static("*"),
-        ))
+        .layer(tower_http::cors::CorsLayer::new()
+            // allow `GET` and `POST` when accessing the resource
+            .allow_methods([http::Method::GET, http::Method::POST])
+            // allow header `Content-Type: application/json``
+            .allow_headers([http::header::CONTENT_TYPE])
+            // allow requests from any origin
+            .allow_origin(tower_http::cors::Any)
+        )
         .with_state(app_state);
 
     let listen_addr: std::net::SocketAddr = (std::net::Ipv6Addr::UNSPECIFIED, listen_port).into();
