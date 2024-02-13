@@ -3,41 +3,59 @@ mod routes;
 use std::sync::Arc;
 
 use anyhow::Context;
+use axum::handler::Handler;
 use tracing_subscriber::util::SubscriberInitExt;
+
+
+const DB_URL: &str = "push_subscriptions.db";
+const SERVER_PORT: u16 = 3000;
+const ENV_AUTH_BEARER_TOKEN: &str = "WEBPUSH_AUTH_BEARER_TOKEN";
 
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let db_url = "push_subscriptions.db";
-    let listen_port: u16 = 3000;
-
     init_logger().await;
-    let db_pool = sqlx::SqlitePool::connect(db_url).await.context(format!("Connecting to DB at '{}'", db_url))?;
+    let db_pool = sqlx::SqlitePool::connect(DB_URL).await.context(format!("Connecting to DB at '{}'", DB_URL))?;
     setup_db(&db_pool).await.context("Setup DB")?;
     tracing::debug!("Connected to DB");
     let app_state = Arc::new(AppState { db_pool });
 
+    // The authorization created by this function is used to protect routes that shouldn't be public like sending a push.
+    // Therefore, clients need to provide the token specified in an environment variable in the Authorization header to get access.
+    let authorization_layer = {
+        let authorization_bearer_token = std::env::var(ENV_AUTH_BEARER_TOKEN).context(format!("Environment variable {} not set", ENV_AUTH_BEARER_TOKEN))?;
+        tower_http::validate_request::ValidateRequestHeaderLayer::bearer(&authorization_bearer_token)
+    };
+
     let app = axum::Router::new()
-        .route("/add_push_subscription", axum::routing::post(routes::add_push_subscription))
-        .route("/show_subscriptions", axum::routing::get(routes::show_subscriptions))
-        .route("/send_pushes", axum::routing::post(routes::send_pushes))
+        .route(
+            "/subscriptions",
+            axum::routing::MethodRouter::new()
+                .get(routes::get_subscriptions.layer(authorization_layer.clone()))
+                .post(routes::add_subscription)
+        )
+        .route(
+            "/push",
+            axum::routing::post(routes::send_push.layer(authorization_layer.clone()))
+        )
         // Set CORS header to allow the JS to subscribe to the push service by `fetch()`ing the subscribe route
         .layer(tower_http::cors::CorsLayer::new()
             // allow `GET` and `POST` when accessing the resource
             .allow_methods([http::Method::GET, http::Method::POST])
-            // allow header `Content-Type: application/json``
+            // allow header `Content-Type: application/json`
             .allow_headers([http::header::CONTENT_TYPE])
             // allow requests from any origin
             .allow_origin(tower_http::cors::Any)
         )
         .with_state(app_state);
 
-    let listen_addr: std::net::SocketAddr = (std::net::Ipv6Addr::UNSPECIFIED, listen_port).into();
+    let listen_addr: std::net::SocketAddr = (std::net::Ipv6Addr::UNSPECIFIED, SERVER_PORT).into();
     let listener = tokio::net::TcpListener::bind(listen_addr).await.unwrap();
     tracing::info!(?listen_addr, "HTTP server listening");
     axum::serve(listener, app).await?;
     Ok(())
 }
+
 
 struct AppState {
     db_pool: sqlx::SqlitePool,

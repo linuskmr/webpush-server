@@ -3,7 +3,7 @@ use std::sync::Arc;
 use sqlx::Row;
 use crate::{AppState, PushSubscription};
 
-pub async fn add_push_subscription(
+pub async fn add_subscription(
     axum::extract::State(app_state): axum::extract::State<Arc<AppState>>,
     axum::extract::Json(push_subscription): axum::extract::Json<PushSubscription>,
 ) -> impl axum::response::IntoResponse {
@@ -13,10 +13,10 @@ pub async fn add_push_subscription(
         .bind(push_subscription.auth)
         .bind(push_subscription.p256dh)
         .execute(&app_state.db_pool).await.unwrap();
-    "OK"
+    http::status::StatusCode::CREATED
 }
 
-pub async fn show_subscriptions(
+pub async fn get_subscriptions(
     axum::extract::State(app_state): axum::extract::State<Arc<AppState>>,
 ) -> impl axum::response::IntoResponse {
 
@@ -51,7 +51,7 @@ pub struct NotificationData {
     url: String,
 }
 
-pub async fn send_pushes(
+pub async fn send_push(
     axum::extract::State(app_state): axum::extract::State<Arc<AppState>>,
     axum::extract::Json(notification): axum::extract::Json<Notification>,
 ) -> impl axum::response::IntoResponse {
@@ -90,7 +90,16 @@ pub async fn send_pushes(
     let http_client = Arc::new(web_push::IsahcWebPushClient::new().unwrap());
     futures::future::join_all(push_payloads.map(|push_payload| async {
         tracing::trace!(?push_payload, "Sending push");
-        if let Err(err) = http_client.send(push_payload).await {
+        let endpoint = push_payload.endpoint.to_string();
+        let send_push_result = http_client.send(push_payload).await;
+        if let Err(err) = send_push_result {
+            let remove_endpoint = matches!(err, web_push::WebPushError::EndpointNotFound | web_push::WebPushError::EndpointNotValid);
+            if remove_endpoint {
+                tracing::debug!("Removing invalid endpoint '{}' from DB", endpoint);
+                sqlx::query("DELETE FROM push_subscriptions WHERE endpoint = ?")
+                    .bind(endpoint)
+                    .execute(&app_state.db_pool).await.unwrap();
+            }
             tracing::error!(?err, "Failed to send push");
         }
     })).await;
