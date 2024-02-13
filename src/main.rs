@@ -1,21 +1,23 @@
 mod routes;
+mod cli;
 
 use std::sync::Arc;
-
+use clap::Parser;
 use anyhow::Context;
 use axum::handler::Handler;
 use tracing_subscriber::util::SubscriberInitExt;
 
 
-const DB_URL: &str = "push_subscriptions.db";
-const SERVER_PORT: u16 = 3000;
 const ENV_AUTH_BEARER_TOKEN: &str = "WEBPUSH_AUTH_BEARER_TOKEN";
 
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logger().await;
-    let db_pool = sqlx::SqlitePool::connect(DB_URL).await.context(format!("Connecting to DB at '{}'", DB_URL))?;
+
+    let cli_args = cli::Args::parse();
+
+    let db_pool = sqlx::SqlitePool::connect(&cli_args.db).await.context(format!("Connecting to DB at '{}'", cli_args.db))?;
     setup_db(&db_pool).await.context("Setup DB")?;
     tracing::debug!("Connected to DB");
     let app_state = Arc::new(AppState { db_pool });
@@ -49,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_state(app_state);
 
-    let listen_addr: std::net::SocketAddr = (std::net::Ipv6Addr::UNSPECIFIED, SERVER_PORT).into();
+    let listen_addr: std::net::SocketAddr = (std::net::Ipv6Addr::UNSPECIFIED, cli_args.port).into();
     let listener = tokio::net::TcpListener::bind(listen_addr).await.unwrap();
     tracing::info!(?listen_addr, "HTTP server listening");
     axum::serve(listener, app).await?;
